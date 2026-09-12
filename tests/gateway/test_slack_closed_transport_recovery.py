@@ -52,6 +52,30 @@ async def test_teardown_disables_sdk_reconnect_before_cancelling_tasks(adapter):
 
 
 @pytest.mark.asyncio
+async def test_teardown_cancels_reconnect_called_from_untracked_listener_task(adapter):
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+    client = SimpleNamespace(closed=False, auto_reconnect_enabled=True)
+
+    async def reconnect(*args, **kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    client.connect_to_new_endpoint = reconnect
+    adapter._handler = SimpleNamespace(client=client, close_async=AsyncMock())
+    slack._track_socket_reconnects(client, adapter._socket_reconnect_tasks)
+    reconnect_task = asyncio.create_task(client.connect_to_new_endpoint(force=True))
+    await started.wait()
+    await adapter._stop_socket_mode_handler()
+    await asyncio.wait_for(stopped.wait(), timeout=1)
+    await asyncio.gather(reconnect_task, return_exceptions=True)
+    assert not adapter._socket_reconnect_tasks
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["timeout", "exception"])
 async def test_stalled_close_does_not_block_recovery(adapter, monkeypatch, failure):
     monkeypatch.setattr(slack, "_SOCKET_TASK_CANCEL_TIMEOUT_S", 0.03)
