@@ -857,6 +857,31 @@ async def _cancel_socket_tasks(tasks: Any) -> None:
             _SOCKET_TASK_CANCEL_TIMEOUT_S)
 
 
+def _track_socket_reconnects(client: Any, tasks: set[asyncio.Task]) -> None:
+    """Track SDK reconnect callers that are not retained as client task attributes.
+
+    ``connect_to_new_endpoint()`` can be called from a message-listener task as well as
+    the SDK's session monitor.  The latter is exposed as ``current_session_monitor``;
+    the former is not, so it can otherwise keep the SDK's unbounded ``connect()`` retry
+    loop alive while teardown closes its shared HTTP session.
+    """
+    original = getattr(client, "connect_to_new_endpoint", None)
+    if not callable(original):
+        return
+
+    async def tracked_connect(*args: Any, **kwargs: Any) -> Any:
+        task = asyncio.current_task()
+        if task is not None:
+            tasks.add(task)
+        try:
+            return await original(*args, **kwargs)
+        finally:
+            if task is not None:
+                tasks.discard(task)
+
+    client.connect_to_new_endpoint = tracked_connect
+
+
 _SLACK_PROXY_HOSTS = ("slack.com", "files.slack.com", "wss-primary.slack.com")
 
 
@@ -1050,6 +1075,7 @@ class SlackAdapter(BasePlatformAdapter):
         self._app: Optional[Any] = None
         self._handler: Optional[Any] = None
         self._socket_mode_task: Optional[asyncio.Task] = None
+        self._socket_reconnect_tasks: set[asyncio.Task] = set()
         # Bot identity per workspace (team_id → WebClient / bot_user_id / display name), so the
         # agent never mistakes a human's mention for itself; primary workspace identity separate.
         self._bot_user_id: Optional[str] = None
@@ -1251,6 +1277,7 @@ class SlackAdapter(BasePlatformAdapter):
             raise RuntimeError("Socket Mode requires an initialized app and app token")
         self._handler = AsyncSocketModeHandler(self._app, self._app_token, proxy=self._proxy_url)
         _apply_slack_proxy(self._handler.client, self._proxy_url)
+        _track_socket_reconnects(self._handler.client, self._socket_reconnect_tasks)
         task = asyncio.create_task(self._handler.start_async())
         self._socket_mode_task = task
         self._socket_handler_started_monotonic = time.monotonic()
@@ -1277,7 +1304,10 @@ class SlackAdapter(BasePlatformAdapter):
             client.auto_reconnect_enabled = False
             client.closed = True
         await _cancel_socket_tasks(
-            [task] + [getattr(client, attr, None) for attr in _SOCKET_CLIENT_TASK_ATTRS])
+            [task]
+            + [getattr(client, attr, None) for attr in _SOCKET_CLIENT_TASK_ATTRS]
+            + list(self._socket_reconnect_tasks)
+        )
         if handler is not None:
             try:
                 await asyncio.wait_for(
