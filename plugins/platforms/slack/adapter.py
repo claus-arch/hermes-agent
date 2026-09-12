@@ -1272,17 +1272,41 @@ class SlackAdapter(BasePlatformAdapter):
         handler, task = self._handler, self._socket_mode_task
         self._handler = self._socket_mode_task = None
         client = getattr(handler, "client", None)
+        # Stop SDK-owned reconnect paths before closing their shared HTTP session.
+        if client is not None:
+            client.auto_reconnect_enabled = False
+            client.closed = True
         await _cancel_socket_tasks(
             [task] + [getattr(client, attr, None) for attr in _SOCKET_CLIENT_TASK_ATTRS])
         if handler is not None:
             try:
-                await handler.close_async()
+                await asyncio.wait_for(
+                    handler.close_async(), timeout=_SOCKET_TASK_CANCEL_TIMEOUT_S
+                )
             except Exception as e:  # pragma: no cover - defensive logging
                 logger.warning(
                     "[Slack] Error while closing Socket Mode handler: %s", e, exc_info=True)
+            finally:
+                session = getattr(client, "aiohttp_client_session", None)
+                if getattr(session, "closed", None) is False:
+                    try:
+                        await asyncio.wait_for(
+                            session.close(), timeout=_SOCKET_TASK_CANCEL_TIMEOUT_S
+                        )
+                    except Exception:
+                        logger.warning(
+                            "[Slack] Error closing Socket Mode HTTP session",
+                            exc_info=True,
+                        )
 
     async def _socket_transport_connected(self) -> Optional[bool]:
         """Best-effort check of current Socket Mode transport state."""
+        client = getattr(self._handler, "client", None)
+        if client is not None:
+            session = getattr(client, "aiohttp_client_session", None)
+            if (getattr(client, "closed", None) is True
+                    or getattr(session, "closed", None) is True):
+                return False
         state = getattr(getattr(self._handler, "client", None), "is_connected", None)
         if state is None:
             return None
