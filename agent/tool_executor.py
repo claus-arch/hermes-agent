@@ -50,7 +50,8 @@ from agent.message_metadata import stamp_data_use
 from agent.session_persistence import sync_rewritten_tool_rows
 from agent.tool_dispatch_helpers import (
     _NEVER_PARALLEL_TOOLS, _is_destructive_command, _append_subdir_hint_to_multimodal,
-    _context_pruned_argument_paths, _plan_tool_batch_segments, make_tool_result_message,
+    _context_pruned_argument_paths, _extract_error_preview, _plan_tool_batch_segments,
+    make_tool_result_message,
 )
 from session_rules.turns import _is_multimodal_tool_result, _multimodal_text_summary
 from tools.terminal_tool_lifecycle import get_active_env
@@ -1576,7 +1577,7 @@ def _append_batch_results(agent, messages: list, effective_task_id: str, batch: 
             agent, messages, ref, function_result,
             budget=budget, tool_duration=tool_duration, is_error=is_error, blocked=blocked,
             effect_disposition=effect_disposition, observed=r is not None, data_use=r.data_use if r else frozenset(),
-            error_preview=lambda res: _multimodal_text_summary(res)[:200],
+            error_preview=_extract_error_preview,
         )
         if committed is None:
             return False
@@ -1859,7 +1860,7 @@ def _publish_sequential_result(agent, messages: list, ref: _ToolCallRef, managed
         agent, messages, ref, function_result,
         budget=budget, tool_duration=tool_duration, is_error=_is_error_result, blocked=managed.blocked,
         effect_disposition="unknown" if _execution_timed_out else None, observed=True, data_use=managed.data_use,
-        error_preview=lambda res: res[:200] if isinstance(res, str) and not agent.verbose_logging else res,
+        error_preview=_extract_error_preview,
         success_log_chars=_result_len,
         verbose_text=_multimodal_text_summary,
     )
