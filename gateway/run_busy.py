@@ -816,6 +816,12 @@ class GatewayBusySessionMixin:
         )
         from gateway.display_config import resolve_display_setting
 
+        configured_ack = resolve_display_setting(
+            _load_gateway_config(), _platform_config_key(event.source.platform), "busy_ack_text",
+        )
+        if isinstance(configured_ack, str) and configured_ack.strip():
+            return configured_ack.strip()
+
         # Terse by default; iteration/tool detail opts in via display.platforms.<p>.busy_ack_detail.
         status_parts = []
         busy_ack_detail_enabled = bool(

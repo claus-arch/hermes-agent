@@ -2222,14 +2222,23 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
         no longer owns the session slot or the executor finished. ``_executor_task_holder[0]`` is
         bound just after this task is scheduled (reads as None until then).
 
-        Interval: agent.gateway_notify_interval / HERMES_AGENT_NOTIFY_INTERVAL (default 180s; 0 or
-        long_running_notifications=off disables)."""
+        Per-platform long_running_initial_delay / long_running_interval override the shared
+        agent.gateway_notify_interval (default 180s). Interval <= 0 or notifications=off disables.
+        An earlier first generic notification acknowledges receipt before later status updates."""
         from gateway.run import _float_env, _interim_metadata, _non_conversational_metadata
         _notify_start = time.time()
-        _NOTIFY_INTERVAL = _float_env("HERMES_AGENT_NOTIFY_INTERVAL", 180)
+        def _seconds(key: str, fallback: float) -> float:
+            # Only a real number overrides; None/bool/garbage keeps the fallback rather than
+            # silently disabling notifications (bool is an int subclass, so exclude it).
+            value = disp.resolve_display_setting(disp.user_config, disp.platform_key, key, None)
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else fallback
+
+        _NOTIFY_INTERVAL = _seconds("long_running_interval", _float_env("HERMES_AGENT_NOTIFY_INTERVAL", 180))
         _long_running_mode = disp._display_surface_mode("long_running_notifications", default=True, allow_generic=True)
         if _NOTIFY_INTERVAL <= 0 or _long_running_mode == "off":
             return
+        _delay = max(0.0, _seconds("long_running_initial_delay", _NOTIFY_INTERVAL))
+        _initial_ack = _delay < _NOTIFY_INTERVAL
         source, session_key, agent_holder = turn_ctx.source, turn_ctx.session_key, turn_ctx.agent_holder
         _status_thread_metadata = turn_ctx._status_thread_metadata
         _notify_adapter = self._delivery_adapter_for(source)
@@ -2237,7 +2246,8 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
             return
         _heartbeat_msg_id: Optional[str] = None
         while True:
-            await asyncio.sleep(_NOTIFY_INTERVAL)
+            await asyncio.sleep(_delay)
+            _delay = _NOTIFY_INTERVAL
             if not self._should_emit_long_running_notification(
                 session_key, agent_holder[0], _executor_task_holder[0]
             ):
@@ -2260,10 +2270,11 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                     if _parts:
                         _status_detail = " — " + ", ".join(_parts)
             _heartbeat_text = (
-                disp._generic_status_phrase("status")
+                disp._generic_status_phrase("generic" if _initial_ack else "status")
                 if _long_running_mode == "generic"
                 else t("gateway.progress.working_heartbeat", minutes=_elapsed_mins, detail=_status_detail)
             )
+            _initial_ack = False
             try:
                 _notify_res = None
                 if _heartbeat_msg_id:
