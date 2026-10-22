@@ -24,6 +24,9 @@ _GLOBAL_DEFAULTS: dict[str, Any] = {
     "interim_assistant_messages": True,
     "suppress_warning_notifications": False,
     "long_running_notifications": True,
+    "long_running_initial_delay": None,  # seconds; default follows the repeat interval
+    "long_running_interval": None,  # seconds; default follows agent.gateway_notify_interval
+    "busy_ack_text": None,  # optional chat-safe replacement, without tool details or command tips
     "busy_ack_detail": True,
     "busy_steer_ack_enabled": True,  # busy_input_mode=steer echo; the text still lands in the run
     # Delete tool-progress / "⏳ Working" bubbles after a SUCCESSFUL final response where deletion is
@@ -187,6 +190,8 @@ _NORMALISERS: dict[str, Any] = {
     "interim_assistant_messages": _norm_bool,
     "suppress_warning_notifications": _norm_suppress_warning_notifications,
     "long_running_notifications": _norm_long_running,
+    "long_running_initial_delay": _norm_int,
+    "long_running_interval": _norm_int,
     "busy_ack_detail": _norm_bool,
     "busy_steer_ack_enabled": _norm_bool,
     "thinking_progress": _norm_bool,
