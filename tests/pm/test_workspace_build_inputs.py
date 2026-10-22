@@ -263,6 +263,39 @@ def test_member_uv_lock_travels_with_its_member(tmp_path):
     assert not (destination / "uv.lock").exists(), "the root lock is seeded by lock_and_sync, not copied"
 
 
+def test_declared_local_wheel_survives_source_removal(tmp_path):
+    core = tmp_path / "core"
+    (core / "vendor").mkdir(parents=True)
+    wheel = core / "vendor/example-1-py3-none-any.whl"
+    wheel.write_bytes(b"locked wheel bytes")
+    (core / "pyproject.toml").write_text(
+        '[project]\nname="core"\nversion="1"\n'
+        '[tool.uv.sources]\nexample={path="vendor/example-1-py3-none-any.whl"}\n'
+        '[tool.setuptools.packages.find]\ninclude=["pm"]\n')
+    destination = tmp_path / "stage"
+    workspace._copy_core_inputs(core, destination)
+    shutil.rmtree(core)
+    assert (destination / "vendor" / wheel.name).read_bytes() == b"locked wheel bytes"
+
+
+@pytest.mark.parametrize("kind", ["parent", "absolute", "symlink", "missing"])
+def test_declared_local_wheel_rejects_unsafe_or_missing_input(tmp_path, kind):
+    core = tmp_path / "core"
+    core.mkdir()
+    outside = tmp_path / "outside.whl"
+    outside.write_bytes(b"private bytes")
+    name = {"parent": "../outside.whl", "absolute": str(outside),
+            "symlink": "linked.whl", "missing": "missing.whl"}[kind]
+    if kind == "symlink":
+        (core / name).symlink_to(outside)
+    (core / "pyproject.toml").write_text(
+        '[project]\nname="core"\nversion="1"\n'
+        '[tool.uv.sources]\nexample={path=' + json.dumps(name) + '}\n')
+    with pytest.raises(workspace.InstallError, match="local wheel"):
+        workspace._copy_core_inputs(core, tmp_path / "stage")
+    assert not (tmp_path / "stage" / "outside.whl").exists()
+
+
 def test_nested_dist_travels_but_root_dist_stays_out(tmp_path):
     """Bundled dashboard plugins ship a tracked dashboard/dist/ the snapshot's code serves."""
     core = tmp_path / "core"

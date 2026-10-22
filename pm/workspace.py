@@ -82,6 +82,22 @@ def _copy_core_inputs(source: Path, destination: Path) -> None:
         files.update(str(p.relative_to(source)) for p in source.glob(pattern))
     files.update(p.name for p in source.glob("*.py"))
 
+    # Local wheels are locked build inputs too. Keep them in each generation so
+    # plugin installation and repair do not depend on a mutable source checkout.
+    for specs in metadata.get("tool", {}).get("uv", {}).get("sources", {}).values():
+        for spec in specs if isinstance(specs, list) else [specs]:
+            name = spec.get("path") if isinstance(spec, dict) else None
+            if not isinstance(name, str) or not name.endswith(".whl"):
+                continue
+            relative = Path(name)
+            entry = source / relative
+            if (relative.is_absolute() or ".." in relative.parts or entry.is_symlink()
+                    or not entry.resolve().is_relative_to(source.resolve())):
+                raise InstallError("venv", f"local wheel escapes the core project: {name}")
+            if not entry.is_file():
+                raise InstallError("venv", f"local wheel is missing: {name}")
+            files.add(name)
+
     # uv.lock is not excluded: the root lock is never copied (only ``files`` are; lock_and_sync
     # seeds or resolves it), and pm/uv.lock is the PM runtime's input (pm/runtime.py::_inputs).
     excluded = {".git", ".venv", "venv", "node_modules", "__pycache__", "build", "dist", "release"}
