@@ -1,0 +1,3 @@
+# Browser Harness compatibility metadata for Pillow 13
+
+This is the official browser-harness 0.1.13 wheel with only its Pillow dependency metadata updated to 13.0.0, plus the required RECORD hashes. All executable code, package version, licenses and other metadata are byte-identical to the official wheel. Provenance includes both wheel hashes and the original PyPI URL. This is a local compatibility build, not a claim that upstream has released this dependency update. It must pass the Pillow/vision compatibility suite and pip check before activation. The exact local wheel and its hash are locked; do not replace it with a fresh upstream wheel that still requires Pillow 12.3.0. Remove this local source when upstream supports the fixed Pillow release.
