@@ -147,21 +147,22 @@ class TestCheckTtsRequirementsMistral:
 
         monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
         with patch(
-            "tools.tts_tool._load_tts_config",
-            return_value={"provider": "mistral"},
-        ), patch("tools.tts_tool._import_edge_tts", side_effect=ImportError), \
-             patch("tools.tts_tool._import_elevenlabs", side_effect=ImportError), \
-             patch("tools.tts_tool._import_openai_client", side_effect=ImportError), \
-             patch("tools.tts_tool._check_neutts_available", return_value=False):
+            "tools.tts_tool._load_tts_config", return_value={"provider": "mistral"}
+        ), patch("pm.ensure_import") as install:
             assert check_tts_requirements() is True
+        install.assert_not_called()
 
-    def test_mistral_key_missing_returns_false(self, mock_mistral_module):
+    @pytest.mark.parametrize("sdk_installed", [True, False])
+    def test_mistral_key_missing_returns_false(self, monkeypatch, sdk_installed):
         from tools.tts_tool import check_tts_requirements
 
-        with patch("tools.tts_tool._import_edge_tts", side_effect=ImportError), \
-             patch("tools.tts_tool._import_elevenlabs", side_effect=ImportError), \
-             patch("tools.tts_tool._import_openai_client", side_effect=ImportError), \
-             patch("tools.tts_tool._check_neutts_available", return_value=False), \
-             patch("tools.tts_tool._check_kittentts_available", return_value=False), \
-             patch("tools.tts_tool._check_piper_available", return_value=False):
+        # Edge can be usable on this host; only the configured provider matters.
+        def extra_available(extra):
+            return extra == "edge-tts" or (extra == "mistral" and sdk_installed)
+
+        monkeypatch.setattr("tools.tts_tool._load_tts_config", lambda: {"provider": "mistral"})
+        monkeypatch.setattr("tools.tts_tool._pm_extra_available", extra_available)
+        monkeypatch.setattr("tools.tts_tool._resolve_provider_key", lambda *_: "")
+        with patch("pm.ensure_import") as install:
             assert check_tts_requirements() is False
+        install.assert_not_called()
