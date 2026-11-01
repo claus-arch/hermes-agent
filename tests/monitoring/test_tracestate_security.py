@@ -1,4 +1,5 @@
 """Local parsing and SDK compatibility; no HTTP or provider requests."""
+import pytest
 import logging
 import time
 
@@ -20,7 +21,8 @@ def test_valid_tracestate_preserves_values():
 
 
 def test_compatible_mistral_keeps_audio_methods_without_network():
-    from mistralai.client import Mistral
+    # mistral er en lazy PM-extra og findes ikke i alle runtimes.
+    Mistral = pytest.importorskip("mistralai.client").Mistral
 
     with Mistral(api_key="test-only-not-a-real-key") as client:
         assert callable(client.audio.speech.complete)
