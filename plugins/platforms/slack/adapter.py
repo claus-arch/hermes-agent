@@ -4237,6 +4237,33 @@ class SlackAdapter(BasePlatformAdapter):
                 "[Slack] Early reject of unauthorized user %s in channel %s", user_id, channel_id)
         return decision is False
 
+    _eyes_scope_warned = False
+
+    async def _claimed_by_foreign_eyes(
+        self, channel_id: str, ts: str, team_id: str, bot_uid: str) -> bool:
+        """KPA: True when someone other than the bot already put :eyes: on the message — a human
+        has taken it, so the bot stays out. Needs ``reactions:read``; fails open (False) on any
+        error, so a missing scope never silences the bot. ``slack.ignore_if_eyes: false`` turns it off."""
+        configured = _extra_or_secret(self.config.extra, "ignore_if_eyes", "SLACK_IGNORE_IF_EYES", "true")
+        if str(configured).lower() in {"false", "0", "no"} or not self._app:
+            return False
+        try:
+            client = self._get_client(channel_id, team_id=team_id or None)
+            resp = await client.reactions_get(channel=channel_id, timestamp=ts)
+            reactions = (resp.get("message") or {}).get("reactions") or []
+        except Exception as e:
+            if not self._eyes_scope_warned:
+                self._eyes_scope_warned = True
+                logger.warning("[Slack] reactions.get failed, ignore_if_eyes inactive (needs reactions:read): %s", e)
+            return False
+        self_uids = {u for u in (bot_uid, self._bot_user_id) if u}
+        for reaction in reactions:
+            if reaction.get("name") == "eyes" and any(
+                    u not in self_uids for u in reaction.get("users") or []):
+                logger.info("[Slack] Ignoring message %s in %s: already has :eyes: from a human", ts, channel_id)
+                return True
+        return False
+
     async def _channel_gate_allows(
         self, *, channel_id: str, routing_text: str, bot_uid: str, is_mentioned: bool,
         is_thread_reply: bool, event_thread_ts, user_id: str, team_id: str, is_dm: bool,
@@ -4701,6 +4728,10 @@ class SlackAdapter(BasePlatformAdapter):
             is_mentioned=is_mentioned, is_thread_reply=is_thread_reply,
             event_thread_ts=event_thread_ts, user_id=user_id, team_id=team_id, is_dm=is_dm,
             force_process=force_process)):
+            return
+        if (
+            not is_dm and not force_process and ts
+            and await self._claimed_by_foreign_eyes(channel_id, ts, team_id, bot_uid)):
             return
         # Claim the message ts HERE: a link unfurl emits `message_changed` with a different event
         # ts, so only the `_processed_message_ts` guard stops a duplicate turn, and it must be set
