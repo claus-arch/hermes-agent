@@ -1123,6 +1123,7 @@ class SlackAdapter(SlackSocketLifecycleMixin, SlackVaultCodeMixin, BasePlatformA
         # never reached the session. Keys follow the thread session-key scoping. See #63530.
         self._thread_rehydration_checked: set = set()
         self._reacting_message_ids: set = set()
+        self._thread_reply_ts: set = set()  # KPA: ts for beskeder hvis svar skal i tråd
         # Active Assistant statuses by (team_id, channel_id, thread_ts) so cleanup
         # can't clear an overlapping Slack Connect workspace; evicted oldest-thread-first.
         self._active_status_threads: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -2932,7 +2933,8 @@ class SlackAdapter(SlackSocketLifecycleMixin, SlackVaultCodeMixin, BasePlatformA
         if not self.config.extra.get("reply_in_thread", True):
             md = metadata or {}
             existing_thread = md.get("thread_id") or md.get("thread_ts")
-            if existing_thread and reply_to and existing_thread == reply_to:
+            if (existing_thread and reply_to and existing_thread == reply_to
+                    and existing_thread not in self._thread_reply_ts):
                 existing_thread = None
             return existing_thread or None
         if metadata:
@@ -4468,6 +4470,12 @@ class SlackAdapter(SlackSocketLifecycleMixin, SlackVaultCodeMixin, BasePlatformA
             return event_thread_ts_raw
         if self.config.extra.get("reply_in_thread", True):
             return ts
+        # KPA: udvalgte kanaler får svar i tråden under beskeden; resten forbliver flade.
+        kanal = str(event.get("channel") or assistant_meta.get("channel_id") or "")
+        if kanal and kanal in self._slack_thread_reply_channels():
+            self._thread_reply_ts.add(ts)
+            self._evict_oldest_by_ts(self._thread_reply_ts, self._REACTING_MESSAGE_IDS_MAX)
+            return ts
         return None
 
     async def _hydrate_thread_context(
@@ -4862,7 +4870,9 @@ class SlackAdapter(SlackSocketLifecycleMixin, SlackVaultCodeMixin, BasePlatformA
                 addressed=is_one_to_one_dm or is_mentioned or is_command_text or force_process))
         # React only when directly addressed; MPIMs are shared, so they need a
         # mention like any channel.
-        if (is_one_to_one_dm or is_mentioned) and self._reactions_enabled():
+        # KPA: i en fri-svar-kanal er hver besked en opgave, så 👀 sættes uden @-omtale.
+        if ((is_one_to_one_dm or is_mentioned or (not is_dm and self._slack_is_free_channel(channel_id)))
+                and self._reactions_enabled()):
             self._track_reacting_message(team_id, ts)
         # App-context is per-turn UI state: in the user message, not SessionSource (would rebuild
         # the agent per view switch and leak stale context). Inert label, never a channel body.
@@ -6658,6 +6668,9 @@ class SlackAdapter(SlackSocketLifecycleMixin, SlackVaultCodeMixin, BasePlatformA
     # and free_response_channels (wake checks still apply); ignored_channels: never touched.
     _slack_free_response_channels = _extra_or_env_channel_set_getter(
         "free_response_channels", "SLACK_FREE_RESPONSE_CHANNELS", coerce_scalar=True)
+    # KPA: kanaler hvor svar altid lægges i tråden under brugerens besked, selv med reply_in_thread=false.
+    _slack_thread_reply_channels = _extra_or_env_channel_set_getter(
+        "thread_reply_channels", "SLACK_THREAD_REPLY_CHANNELS")
     _slack_allowed_channels = _extra_or_env_channel_set_getter(
         "allowed_channels", "SLACK_ALLOWED_CHANNELS")
     _slack_require_mention_channels = _extra_or_env_channel_set_getter(
@@ -7119,6 +7132,7 @@ _YAML_BRIDGE = (  # (yaml key, env var, kind) for apply_yaml_bridge
     ("require_mention_channels", "SLACK_REQUIRE_MENTION_CHANNELS", "csv"),
     ("reaction_triggers", "SLACK_REACTION_TRIGGERS", "csv"), ("reaction_trigger_target", "SLACK_REACTION_TRIGGER_TARGET", "str"),
     ("allowed_channels", "SLACK_ALLOWED_CHANNELS", "csv"), ("ignored_channels", "SLACK_IGNORED_CHANNELS", "csv"),
+    ("thread_reply_channels", "SLACK_THREAD_REPLY_CHANNELS", "csv"),
 )
 
 
